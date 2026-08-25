@@ -39,6 +39,7 @@ def init_db():
     if "locked_balance" not in cols: x.execute("ALTER TABLE users ADD COLUMN locked_balance REAL NOT NULL DEFAULT 0")
     if "referral_code" not in cols: x.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
     if "referred_by" not in cols: x.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+    _ensure_v43(c)
     c.commit(); c.close()
 
 def get_user(tid):
@@ -100,3 +101,38 @@ def close_demo_trade(trade_id, tid, exit_price, pnl):
     c=conn(); r=c.execute("SELECT * FROM demo_trades WHERE id=? AND telegram_id=? AND status='open'",(trade_id,tid)).fetchone()
     if not r: c.close(); return None
     c.execute("UPDATE demo_trades SET exit_price=?,pnl=?,status='closed',closed_at=? WHERE id=?",(exit_price,pnl,now(),trade_id)); c.commit(); c.close(); return dict(r)
+
+# V4.3 administration and risk controls
+def _ensure_v43(c):
+    c.execute("""CREATE TABLE IF NOT EXISTS user_controls (
+        telegram_id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active',
+        max_trade_stake REAL NOT NULL DEFAULT 100, max_open_positions INTEGER NOT NULL DEFAULT 3,
+        updated_at TEXT NOT NULL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS admin_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER NOT NULL,
+        action TEXT NOT NULL, target_id INTEGER, details TEXT, created_at TEXT NOT NULL
+    )""")
+    rows=c.execute("SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM user_controls)").fetchall()
+    for r in rows: c.execute("INSERT INTO user_controls (telegram_id,updated_at) VALUES (?,?)",(r[0],now()))
+
+def get_users(limit=20):
+    c=conn(); rows=c.execute("SELECT * FROM users ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall(); c.close(); return [dict(r) for r in rows]
+
+def get_user_controls(tid):
+    c=conn(); r=c.execute("SELECT * FROM user_controls WHERE telegram_id=?",(tid,)).fetchone()
+    if not r:
+        c.execute("INSERT OR IGNORE INTO user_controls (telegram_id,updated_at) VALUES (?,?)",(tid,now())); c.commit(); r=c.execute("SELECT * FROM user_controls WHERE telegram_id=?",(tid,)).fetchone()
+    c.close(); return dict(r)
+
+def set_user_status(tid,status):
+    c=conn(); c.execute("INSERT INTO user_controls (telegram_id,status,updated_at) VALUES (?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at",(tid,status,now())); c.commit(); c.close()
+
+def set_user_risk(tid,max_trade_stake,max_open_positions):
+    c=conn(); c.execute("INSERT INTO user_controls (telegram_id,max_trade_stake,max_open_positions,updated_at) VALUES (?,?,?,?) ON CONFLICT(telegram_id) DO UPDATE SET max_trade_stake=excluded.max_trade_stake,max_open_positions=excluded.max_open_positions,updated_at=excluded.updated_at",(tid,max_trade_stake,max_open_positions,now())); c.commit(); c.close()
+
+def add_admin_audit(admin_id,action,target_id=None,details=""):
+    c=conn(); c.execute("INSERT INTO admin_audit (admin_id,action,target_id,details,created_at) VALUES (?,?,?,?,?)",(admin_id,action,target_id,details,now())); c.commit(); c.close()
+
+def get_admin_audit(limit=20):
+    c=conn(); rows=c.execute("SELECT * FROM admin_audit ORDER BY id DESC LIMIT ?",(limit,)).fetchall(); c.close(); return [dict(r) for r in rows]

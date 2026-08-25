@@ -2,7 +2,7 @@ import logging, math, time
 from decimal import Decimal, InvalidOperation
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade
+from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit
 from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME
 
 logging.basicConfig(level=logging.INFO)
@@ -61,7 +61,15 @@ async def start(update, context):
 async def admin(update, context):
     if not is_admin(update.effective_user.id): return await update.message.reply_text("⛔ Admin access only.")
     users,pending_count,volume=get_stats()
-    await update.message.reply_text(f"🛡 AURIX TRADE ADMIN\n\n👥 Users: {users}\n⏳ Pending: {pending_count}\n💵 Demo transaction volume: {money(volume)}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💰 Deposit Requests",callback_data="admin_deposits")],[InlineKeyboardButton("💵 Withdrawal Requests",callback_data="admin_withdrawals")]]))
+    await update.message.reply_text(f"🛡 AURIX TRADE ADMIN\n\n👥 Users: {users}\n⏳ Pending requests: {pending_count}\n💵 Demo transaction volume: {money(volume)}\n\nUse the controls below to monitor users, requests, risk settings and admin activity.", reply_markup=admin_menu())
+
+def admin_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👥 Users",callback_data="admin_users")],
+        [InlineKeyboardButton("💰 Deposit Requests",callback_data="admin_deposits"),InlineKeyboardButton("💵 Withdrawal Requests",callback_data="admin_withdrawals")],
+        [InlineKeyboardButton("🛡 Risk Controls",callback_data="admin_risk"),InlineKeyboardButton("📜 Audit Log",callback_data="admin_audit")],
+        [InlineKeyboardButton("🔄 Refresh",callback_data="admin_home")]
+    ])
 
 async def handle_text(update, context):
     uid=update.effective_user.id; state=pending.get(uid)
@@ -90,10 +98,43 @@ async def handle_text(update, context):
         balance=Decimal(str(get_balance(uid)))
         open_stake=sum(Decimal(str(t["stake"])) for t in get_demo_trades(uid,"open"))
         if stake <= 0: return await update.message.reply_text("Stake must be greater than zero.")
+        controls=get_user_controls(uid)
+        if controls["status"] != "active": return await update.message.reply_text("⛔ Your demo account is currently restricted. Contact support.")
+        if stake > Decimal(str(controls["max_trade_stake"])): return await update.message.reply_text(f"Risk limit: maximum demo stake is {money(controls['max_trade_stake'])}.")
+        if len(get_demo_trades(uid,"open")) >= int(controls["max_open_positions"]): return await update.message.reply_text(f"Risk limit: maximum open positions is {controls['max_open_positions']}.")
         if stake > balance-open_stake: return await update.message.reply_text(f"Stake exceeds available demo capital. Available: {money(balance-open_stake)}")
         if not lock_balance(uid, float(stake)): return await update.message.reply_text("Unable to reserve that demo stake. Please try again.")
         entry=market_price(symbol); trade_id=create_demo_trade(uid,symbol,side,float(stake),entry); pending.pop(uid,None)
         await update.message.reply_text(f"📈 DEMO POSITION OPENED\n\n{symbol} • {side}\nStake: {money(stake)}\nEntry: {entry:,.2f}\nTrade ID: #{trade_id}\n\nThis is simulated paper trading only; no broker/exchange order was sent.",reply_markup=trading_menu())
+
+async def admin_users(update,context):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return await q.edit_message_text("⛔ Admin access only.")
+    rows=get_users(20)
+    if not rows: return await q.edit_message_text("No users yet.",reply_markup=admin_menu())
+    lines=["👥 USER MANAGEMENT\n"]; buttons=[]
+    for u in rows:
+        c=get_user_controls(u["telegram_id"]); lines.append(f"• {u['telegram_id']} — {u.get('first_name') or 'User'} — {c['status']} — max stake {money(c['max_trade_stake'])} — open {c['max_open_positions']}")
+        buttons.append([InlineKeyboardButton(f"{'🔴 Suspend' if c['status']=='active' else '🟢 Activate'} {u['telegram_id']}",callback_data=f"userstatus:{u['telegram_id']}:{'suspended' if c['status']=='active' else 'active'}")])
+    buttons.append([InlineKeyboardButton("🔙 Admin",callback_data="admin_home")])
+    await q.edit_message_text("\n".join(lines),reply_markup=InlineKeyboardMarkup(buttons))
+
+async def admin_risk(update,context):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return await q.edit_message_text("⛔ Admin access only.")
+    rows=get_users(10); lines=["🛡 RISK CONTROLS\n\nPreset limits currently applied to users:"]; buttons=[]
+    for u in rows:
+        c=get_user_controls(u["telegram_id"]); lines.append(f"• {u['telegram_id']}: {money(c['max_trade_stake'])} max stake / {c['max_open_positions']} open")
+        buttons.append([InlineKeyboardButton(f"Conservative {u['telegram_id']}",callback_data=f"risk:{u['telegram_id']}:25:1"),InlineKeyboardButton(f"Standard {u['telegram_id']}",callback_data=f"risk:{u['telegram_id']}:100:3")])
+    buttons.append([InlineKeyboardButton("🔙 Admin",callback_data="admin_home")])
+    await q.edit_message_text("\n".join(lines),reply_markup=InlineKeyboardMarkup(buttons))
+
+async def admin_audit(update,context):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return await q.edit_message_text("⛔ Admin access only.")
+    rows=get_admin_audit(20)
+    lines=["📜 ADMIN AUDIT LOG\n"] + [f"• {r['created_at']} — admin {r['admin_id']} — {r['action']} — {r['target_id'] or '-'}\n  {r['details']}" for r in rows]
+    await q.edit_message_text("\n".join(lines) if rows else "📜 ADMIN AUDIT LOG\n\nNo admin actions recorded yet.",reply_markup=admin_menu())
 
 async def admin_list(update,context):
     q=update.callback_query; await q.answer()
@@ -125,8 +166,18 @@ def trade_pnl(trade):
 async def callback(update,context):
     q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="admin_home":
-        if is_admin(uid): await q.edit_message_text("🛡 ADMIN",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💰 Deposit Requests",callback_data="admin_deposits")],[InlineKeyboardButton("💵 Withdrawal Requests",callback_data="admin_withdrawals")]]))
+        if is_admin(uid):
+            users,pending_count,volume=get_stats(); await q.edit_message_text(f"🛡 AURIX TRADE ADMIN\n\n👥 Users: {users}\n⏳ Pending requests: {pending_count}\n💵 Demo transaction volume: {money(volume)}",reply_markup=admin_menu())
         return
+    if q.data=="admin_users": return await admin_users(update,context)
+    if q.data=="admin_risk": return await admin_risk(update,context)
+    if q.data=="admin_audit": return await admin_audit(update,context)
+    if q.data.startswith("userstatus:"):
+        if not is_admin(uid): return await q.edit_message_text("⛔ Admin access only.")
+        _,target,status=q.data.split(":"); set_user_status(int(target),status); add_admin_audit(uid,"user_status",int(target),f"status={status}"); return await admin_users(update,context)
+    if q.data.startswith("risk:"):
+        if not is_admin(uid): return await q.edit_message_text("⛔ Admin access only.")
+        _,target,max_stake,max_open=q.data.split(":"); set_user_risk(int(target),float(max_stake),int(max_open)); add_admin_audit(uid,"risk_update",int(target),f"max_stake={max_stake},max_open={max_open}"); return await admin_risk(update,context)
     if q.data in ("admin_deposits","admin_withdrawals"): return await admin_list(update,context)
     if q.data.startswith(("approve:","reject:")): return await admin_decision(update,context)
     if q.data=="deposit": pending[uid]=( "deposit", ); return await q.edit_message_text(f"💰 DEPOSIT\n\nEnter USD amount.\nMinimum: {money(MIN_DEPOSIT_USD)}\nDemo fee: {DEPOSIT_FEE_RATE*100}%\n\n⚠️ DEMO ONLY — do not send money.",reply_markup=back())
