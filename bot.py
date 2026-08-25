@@ -2,7 +2,7 @@ import logging, math, time
 from decimal import Decimal, InvalidOperation
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from database import init_db, get_user, create_user, get_balance, adjust_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade
+from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade
 from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME
 
 logging.basicConfig(level=logging.INFO)
@@ -91,6 +91,7 @@ async def handle_text(update, context):
         open_stake=sum(Decimal(str(t["stake"])) for t in get_demo_trades(uid,"open"))
         if stake <= 0: return await update.message.reply_text("Stake must be greater than zero.")
         if stake > balance-open_stake: return await update.message.reply_text(f"Stake exceeds available demo capital. Available: {money(balance-open_stake)}")
+        if not lock_balance(uid, float(stake)): return await update.message.reply_text("Unable to reserve that demo stake. Please try again.")
         entry=market_price(symbol); trade_id=create_demo_trade(uid,symbol,side,float(stake),entry); pending.pop(uid,None)
         await update.message.reply_text(f"📈 DEMO POSITION OPENED\n\n{symbol} • {side}\nStake: {money(stake)}\nEntry: {entry:,.2f}\nTrade ID: #{trade_id}\n\nThis is simulated paper trading only; no broker/exchange order was sent.",reply_markup=trading_menu())
 
@@ -147,11 +148,13 @@ async def callback(update,context):
     if q.data.startswith("close:"):
         tid=int(q.data.split(":")[1]); t=get_demo_trade(tid,uid)
         if not t or t["status"]!="open": return await q.edit_message_text("Position is no longer open.",reply_markup=trading_menu())
-        cur,pnl=trade_pnl(t); close_demo_trade(tid,uid,cur,float(pnl)); return await q.edit_message_text(f"🔒 DEMO POSITION CLOSED\n\n#{tid} • {t['symbol']} • {t['side']}\nExit: {cur:,.2f}\nSimulated P/L: {money(pnl)}\n\nNo real funds were moved.",reply_markup=trading_menu())
+        cur,pnl=trade_pnl(t);
+        if not release_trade_balance(uid, float(t["stake"]), float(pnl)): return await q.edit_message_text("Unable to settle this demo position safely. Please contact support.",reply_markup=trading_menu())
+        close_demo_trade(tid,uid,cur,float(pnl)); return await q.edit_message_text(f"🔒 DEMO POSITION CLOSED\n\n#{tid} • {t['symbol']} • {t['side']}\nExit: {cur:,.2f}\nSimulated P/L: {money(pnl)}\n\nNo real funds were moved.",reply_markup=trading_menu())
     if q.data=="performance":
-        rows=get_demo_trades(uid); closed=[r for r in rows if r["status"]=="closed"]; pnl=sum(Decimal(str(r["pnl"] or 0)) for r in closed); wins=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))>0); return await q.edit_message_text(f"📊 DEMO PERFORMANCE\n\nClosed trades: {len(closed)}\nWinning trades: {wins}\nRealized simulated P/L: {money(pnl)}\n\n⚠️ These are simulated results only and do not represent live performance.",reply_markup=trading_menu())
-    u=get_user(uid); bal=Decimal(str(u["balance"] if u else 0))
-    if q.data=="dashboard": text=f"📊 DASHBOARD\n\n💵 Demo balance: {money(bal)}\n🏷 Account tier: {tier(bal)}\n\n📈 Trading status: DEMO / PAPER\n🥇 XAU/USD: simulated\n₿ BTC/USDT: simulated\n\nUse Demo Trading to open and close paper positions and view simulated P/L."
+        rows=get_demo_trades(uid); closed=[r for r in rows if r["status"]=="closed"]; pnl=sum(Decimal(str(r["pnl"] or 0)) for r in closed); wins=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))>0); losses=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))<0); win_rate=(Decimal(wins)/Decimal(len(closed))*100 if closed else Decimal(0)); volume=sum(Decimal(str(r["stake"])) for r in closed); return await q.edit_message_text(f"📊 DEMO PERFORMANCE\n\nClosed trades: {len(closed)}\nWinning trades: {wins}\nLosing trades: {losses}\nWin rate: {win_rate:.1f}%\nDemo volume: {money(volume)}\nRealized simulated P/L: {money(pnl)}\n\n⚠️ These are simulated results only and do not represent live performance.",reply_markup=trading_menu())
+    u=get_user(uid); bal=Decimal(str(u["balance"] if u else 0)); locked=Decimal(str(u["locked_balance"] if u and "locked_balance" in u else 0)); equity=bal+locked
+    if q.data=="dashboard": text=f"📊 DASHBOARD\n\n💵 Available demo balance: {money(bal)}\n🔒 Locked in open trades: {money(locked)}\n💎 Demo equity: {money(equity)}\n🏷 Account tier: {tier(equity)}\n\n📈 Trading status: DEMO / PAPER\n🥇 XAU/USD: simulated\n₿ BTC/USDT: simulated\n\nUse Demo Trading to open and close paper positions and view simulated P/L."
     elif q.data=="transactions":
         rows=get_transactions(uid); text="📜 TRANSACTIONS\n\n"+("\n".join([f"• {r['kind'].title()} {money(r['amount'])} — {r['reference'] or '—'}" for r in rows]) if rows else "No completed demo transactions yet.")
     elif q.data=="referral": text=f"👥 REFERRAL\n\nYour referral code: {u['referral_code'] if u else '—'}\n\nReferral analytics are included in the v4 account model. Reward terms should be published only after the commercial/legal model is finalized."

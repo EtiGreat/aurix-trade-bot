@@ -15,7 +15,7 @@ def init_db():
     c = conn(); x = c.cursor()
     x.execute("""CREATE TABLE IF NOT EXISTS users (
         telegram_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
-        balance REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+        balance REAL NOT NULL DEFAULT 0, locked_balance REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
         referral_code TEXT, referred_by INTEGER
     )""")
     x.execute("""CREATE TABLE IF NOT EXISTS requests (
@@ -36,6 +36,7 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, closed_at TEXT
     )""")
     cols = {r[1] for r in x.execute("PRAGMA table_info(users)").fetchall()}
+    if "locked_balance" not in cols: x.execute("ALTER TABLE users ADD COLUMN locked_balance REAL NOT NULL DEFAULT 0")
     if "referral_code" not in cols: x.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
     if "referred_by" not in cols: x.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
     c.commit(); c.close()
@@ -52,6 +53,12 @@ def get_balance(tid):
 
 def adjust_balance(tid, delta):
     c=conn(); c.execute("UPDATE users SET balance=balance+? WHERE telegram_id=?", (delta,tid)); c.commit(); c.close()
+
+def lock_balance(tid, amount):
+    c=conn(); c.execute("UPDATE users SET balance=balance-?, locked_balance=locked_balance+? WHERE telegram_id=? AND balance>=?", (amount, amount, tid, amount)); ok=c.total_changes>0; c.commit(); c.close(); return ok
+
+def release_trade_balance(tid, stake, pnl):
+    c=conn(); c.execute("UPDATE users SET locked_balance=locked_balance-?, balance=balance+? WHERE telegram_id=? AND locked_balance>=?", (stake, stake+pnl, tid, stake)); ok=c.total_changes>0; c.commit(); c.close(); return ok
 
 def create_request(tid,kind,amount,fee,reference):
     c=conn(); c.execute("INSERT INTO requests (telegram_id,kind,amount,fee,status,reference,created_at) VALUES (?,?,?,?,?,?,?)", (tid,kind,amount,fee,"pending",reference,now())); c.commit(); c.close(); return reference

@@ -1,20 +1,13 @@
-# AURIX TRADE V4.1 — Demo / Paper Trading Stage
+# AURIX TRADE V4.2 — Portfolio & Risk Demo
 
-V4.1 adds a simulated paper-trading layer for XAU/USD and BTC/USDT, open/close demo positions, simulated P/L, open-position tracking and performance summaries. It remains DEMO/TEST MODE.
+Paper-trading demo for Telegram. No real deposits, custody, withdrawals, broker/exchange orders, or live execution.
 
-## Safety / deployment boundary
-This build does **not** accept, custody, transfer, or withdraw real money and does not place live broker/exchange orders. Market prices and P/L are simulated for product testing only.
+## V4.2 changes
+- Properly reserves/locks demo stake when a paper position opens.
+- Releases the stake plus simulated P/L when a paper position closes.
+- Dashboard shows available balance, locked capital, and demo equity.
+- Performance shows wins, losses, win rate, demo volume, and realized simulated P/L.
+- Existing SQLite database migrates `locked_balance` automatically.
 
-Before any real-money launch, establish compliant payment/custody infrastructure, reconciliation, authentication and authorization controls, audit logging, applicable KYC/AML procedures, broker/exchange integrations, security testing, and jurisdiction-specific legal/regulatory advice.
-
-## Commands
-- `/start` — user dashboard
-- `/admin` — admin request console
-
-## Railway variables
-- `BOT_TOKEN` — Telegram bot token
-- `ADMIN_TELEGRAM_ID` — administrator Telegram ID
-- `SUPPORT_USERNAME` — support username without `@`
-- `MIN_DEPOSIT_USD` — default `50`
-- `DEPOSIT_FEE_RATE` — demo fee rate, default `0.05`
-- `PROFIT_FEE_RATE` — reserved for future disclosed performance-fee model
+## Railway
+Set `BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, and any existing support/config variables in Railway Variables. Do not commit secrets.
