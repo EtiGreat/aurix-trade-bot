@@ -1,11 +1,11 @@
-# AURIX TRADE V4 — Demo Telegram Trading Platform
+# AURIX TRADE V4.1 — Demo / Paper Trading Stage
 
-V4 upgrades the V3 demo request workflow with the AURIX TRADE brand system, clearer dashboard/account UX, account tiers, demo transaction ledger, referral identity, improved admin accounting, and stronger risk/demo disclosures.
+V4.1 adds a simulated paper-trading layer for XAU/USD and BTC/USDT, open/close demo positions, simulated P/L, open-position tracking and performance summaries. It remains DEMO/TEST MODE.
 
 ## Safety / deployment boundary
-This build is **DEMO/TEST MODE**. It does not accept, custody, transfer, or withdraw real money and it does not place live broker/exchange orders. Do not publish payment addresses or claim live execution from this build.
+This build does **not** accept, custody, transfer, or withdraw real money and does not place live broker/exchange orders. Market prices and P/L are simulated for product testing only.
 
-Before a real-money launch, establish compliant payment/custody infrastructure, reconciliation, authentication and authorization controls, audit logging, applicable KYC/AML procedures, broker/exchange integrations, security testing, and jurisdiction-specific legal/regulatory advice.
+Before any real-money launch, establish compliant payment/custody infrastructure, reconciliation, authentication and authorization controls, audit logging, applicable KYC/AML procedures, broker/exchange integrations, security testing, and jurisdiction-specific legal/regulatory advice.
 
 ## Commands
 - `/start` — user dashboard
@@ -17,4 +17,4 @@ Before a real-money launch, establish compliant payment/custody infrastructure, 
 - `SUPPORT_USERNAME` — support username without `@`
 - `MIN_DEPOSIT_USD` — default `50`
 - `DEPOSIT_FEE_RATE` — demo fee rate, default `0.05`
-- `PROFIT_FEE_RATE` — reserved for the future disclosed performance-fee model, default `0.20`
+- `PROFIT_FEE_RATE` — reserved for future disclosed performance-fee model

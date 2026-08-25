@@ -29,12 +29,15 @@ def init_db():
         kind TEXT NOT NULL, amount REAL NOT NULL, fee REAL NOT NULL DEFAULT 0,
         reference TEXT, note TEXT, created_at TEXT NOT NULL
     )""")
-    # Safe migration for V3 databases.
+    x.execute("""CREATE TABLE IF NOT EXISTS demo_trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL,
+        symbol TEXT NOT NULL, side TEXT NOT NULL, stake REAL NOT NULL,
+        entry_price REAL NOT NULL, exit_price REAL, pnl REAL,
+        status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, closed_at TEXT
+    )""")
     cols = {r[1] for r in x.execute("PRAGMA table_info(users)").fetchall()}
-    if "referral_code" not in cols:
-        x.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
-    if "referred_by" not in cols:
-        x.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+    if "referral_code" not in cols: x.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
+    if "referred_by" not in cols: x.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
     c.commit(); c.close()
 
 def get_user(tid):
@@ -52,9 +55,6 @@ def adjust_balance(tid, delta):
 
 def create_request(tid,kind,amount,fee,reference):
     c=conn(); c.execute("INSERT INTO requests (telegram_id,kind,amount,fee,status,reference,created_at) VALUES (?,?,?,?,?,?,?)", (tid,kind,amount,fee,"pending",reference,now())); c.commit(); c.close(); return reference
-
-def get_request(rid):
-    c=conn(); r=c.execute("SELECT * FROM requests WHERE id=?",(rid,)).fetchone(); c.close(); return dict(r) if r else None
 
 def get_requests(status="pending",kind=None):
     c=conn(); q="SELECT * FROM requests WHERE status=?"; args=[status]
@@ -74,3 +74,22 @@ def get_transactions(tid,limit=15):
 
 def get_stats():
     c=conn(); users=c.execute("SELECT COUNT(*) FROM users").fetchone()[0]; pending=c.execute("SELECT COUNT(*) FROM requests WHERE status='pending'").fetchone()[0]; volume=c.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE kind IN ('deposit','withdrawal')").fetchone()[0]; c.close(); return users,pending,volume
+
+def create_demo_trade(tid,symbol,side,stake,entry):
+    c=conn(); cur=c.cursor(); cur.execute("INSERT INTO demo_trades (telegram_id,symbol,side,stake,entry_price,status,created_at) VALUES (?,?,?,?,?, 'open',?)",(tid,symbol,side,stake,entry,now())); rid=cur.lastrowid; c.commit(); c.close(); return rid
+
+def get_demo_trades(tid,status=None,limit=20):
+    c=conn(); q="SELECT * FROM demo_trades WHERE telegram_id=?"; args=[tid]
+    if status: q += " AND status=?"; args.append(status)
+    q += " ORDER BY id DESC LIMIT ?"; args.append(limit)
+    rows=c.execute(q,args).fetchall(); c.close(); return [dict(r) for r in rows]
+
+def get_demo_trade(trade_id, tid=None):
+    c=conn(); q="SELECT * FROM demo_trades WHERE id=?"; args=[trade_id]
+    if tid is not None: q += " AND telegram_id=?"; args.append(tid)
+    r=c.execute(q,args).fetchone(); c.close(); return dict(r) if r else None
+
+def close_demo_trade(trade_id, tid, exit_price, pnl):
+    c=conn(); r=c.execute("SELECT * FROM demo_trades WHERE id=? AND telegram_id=? AND status='open'",(trade_id,tid)).fetchone()
+    if not r: c.close(); return None
+    c.execute("UPDATE demo_trades SET exit_price=?,pnl=?,status='closed',closed_at=? WHERE id=?",(exit_price,pnl,now(),trade_id)); c.commit(); c.close(); return dict(r)
