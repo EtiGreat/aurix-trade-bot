@@ -2,7 +2,7 @@ import logging, math, time, os, threading
 from decimal import Decimal, InvalidOperation
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit
+from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report
 from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME, PUBLIC_BASE_URL, OFFICIAL_CHANNEL_URL
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +29,8 @@ def menu():
         [InlineKeyboardButton("📊 Dashboard", callback_data="dashboard"), InlineKeyboardButton("💰 Deposit", callback_data="deposit")],
         [InlineKeyboardButton("📈 Demo Trading", callback_data="trading"), InlineKeyboardButton("💵 Withdraw", callback_data="withdraw")],
         [InlineKeyboardButton("📜 Transactions", callback_data="transactions"), InlineKeyboardButton("👥 Referral", callback_data="referral")],
+        [InlineKeyboardButton("🔔 Notifications", callback_data="notifications"), InlineKeyboardButton("📊 Report", callback_data="report")],
+        [InlineKeyboardButton("🔔 Notifications", callback_data="notifications"), InlineKeyboardButton("📊 Report", callback_data="report")],
         [InlineKeyboardButton("🆘 Support", callback_data="support"), InlineKeyboardButton("⚠️ Risk", callback_data="risk")],
         [InlineKeyboardButton("📜 Legal & Risk", callback_data="legal")],
         [InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL_URL)] if OFFICIAL_CHANNEL_URL else [InlineKeyboardButton("📢 Official Channel", callback_data="channel")]
@@ -58,6 +60,8 @@ async def start(update, context):
         "🤖 Automated Gold & Crypto Trading\n🥇 XAU/USD  •  ₿ BTC/USDT\n\n"
         f"💰 Minimum demo deposit: {money(MIN_DEPOSIT_USD)}\n\n"
         "🧪 DEMO / PAPER-TRADING MODE\nNo real deposits, custody, broker orders or withdrawals are processed by this build.\n\n"
+        f"🔔 Notifications: {count_unread_notifications(u.id)} unread\n\n"
+        f"🔔 Notifications: {count_unread_notifications(u.id)} unread\n\n"
         "⚠️ Trading involves substantial risk. Returns are not guaranteed.", reply_markup=menu())
 
 async def admin(update, context):
@@ -70,8 +74,27 @@ def admin_menu():
         [InlineKeyboardButton("👥 Users",callback_data="admin_users")],
         [InlineKeyboardButton("💰 Deposit Requests",callback_data="admin_deposits"),InlineKeyboardButton("💵 Withdrawal Requests",callback_data="admin_withdrawals")],
         [InlineKeyboardButton("🛡 Risk Controls",callback_data="admin_risk"),InlineKeyboardButton("📜 Audit Log",callback_data="admin_audit")],
+        [InlineKeyboardButton("📊 Operations Report",callback_data="admin_report")],
+        [InlineKeyboardButton("📊 Operations Report",callback_data="admin_report")],
         [InlineKeyboardButton("🔄 Refresh",callback_data="admin_home")]
     ])
+
+
+async def notify(update, context):
+    if not is_admin(update.effective_user.id): return await update.message.reply_text("⛔ Admin access only.")
+    raw=" ".join(context.args).strip()
+    if "|" not in raw: return await update.message.reply_text("Usage: /notify Title | Message")
+    title,message=[x.strip() for x in raw.split("|",1)]
+    users=get_users(10000); sent=0
+    for u in users:
+        add_notification(u["telegram_id"],title,message,"admin")
+        try:
+            await context.bot.send_message(chat_id=u["telegram_id"], text=f"🔔 {title}\n\n{message}")
+            sent += 1
+        except Exception:
+            pass
+    add_admin_audit(update.effective_user.id,"broadcast_notification",None,f"recipients={len(users)},sent={sent}")
+    await update.message.reply_text(f"🔔 Notification created for {len(users)} users; Telegram delivery succeeded for {sent}.",reply_markup=admin_menu())
 
 async def handle_text(update, context):
     uid=update.effective_user.id; state=pending.get(uid)
@@ -165,6 +188,18 @@ async def admin_decision(update,context):
 def trade_pnl(trade):
     current=market_price(trade["symbol"]); entry=Decimal(str(trade["entry_price"])); stake=Decimal(str(trade["stake"])); move=(Decimal(str(current))-entry)/entry; sign=Decimal("1") if trade["side"]=="LONG" else Decimal("-1"); pnl=(stake*move*sign).quantize(Decimal("0.01")); return current,pnl
 
+async def admin_report(update,context):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return await q.edit_message_text("⛔ Admin access only.")
+    r=get_operational_report()
+    await q.edit_message_text(
+        "📊 OPERATIONS REPORT\n\n"
+        f"👥 Total users: {r['users']}\n🟢 Active: {r['active']}\n🔴 Suspended: {r['suspended']}\n"
+        f"📈 Open demo trades: {r['open_trades']}\n📜 Closed demo trades: {r['closed_trades']}\n"
+        f"💹 Realized demo P/L: {money(r['demo_pnl'])}\n"
+        f"⏳ Pending deposits: {r['pending_deposits']}\n💵 Pending withdrawals: {r['pending_withdrawals']}\n"
+        f"🔔 Unread notifications: {r['unread']}\n\n🧪 Demo/paper-trading environment only.", reply_markup=admin_menu())
+
 async def callback(update,context):
     q=update.callback_query; await q.answer(); uid=q.from_user.id
     if q.data=="admin_home":
@@ -174,6 +209,8 @@ async def callback(update,context):
     if q.data=="admin_users": return await admin_users(update,context)
     if q.data=="admin_risk": return await admin_risk(update,context)
     if q.data=="admin_audit": return await admin_audit(update,context)
+    if q.data=="admin_report": return await admin_report(update,context)
+    if q.data=="admin_report": return await admin_report(update,context)
     if q.data.startswith("userstatus:"):
         if not is_admin(uid): return await q.edit_message_text("⛔ Admin access only.")
         _,target,status=q.data.split(":"); set_user_status(int(target),status); add_admin_audit(uid,"user_status",int(target),f"status={status}"); return await admin_users(update,context)
@@ -207,7 +244,17 @@ async def callback(update,context):
     if q.data=="performance":
         rows=get_demo_trades(uid); closed=[r for r in rows if r["status"]=="closed"]; pnl=sum(Decimal(str(r["pnl"] or 0)) for r in closed); wins=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))>0); losses=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))<0); win_rate=(Decimal(wins)/Decimal(len(closed))*100 if closed else Decimal(0)); volume=sum(Decimal(str(r["stake"])) for r in closed); return await q.edit_message_text(f"📊 DEMO PERFORMANCE\n\nClosed trades: {len(closed)}\nWinning trades: {wins}\nLosing trades: {losses}\nWin rate: {win_rate:.1f}%\nDemo volume: {money(volume)}\nRealized simulated P/L: {money(pnl)}\n\n⚠️ These are simulated results only and do not represent live performance.",reply_markup=trading_menu())
     u=get_user(uid); bal=Decimal(str(u["balance"] if u else 0)); locked=Decimal(str(u["locked_balance"] if u and "locked_balance" in u else 0)); equity=bal+locked
-    if q.data=="dashboard": text=f"📊 DASHBOARD\n\n💵 Available demo balance: {money(bal)}\n🔒 Locked in open trades: {money(locked)}\n💎 Demo equity: {money(equity)}\n🏷 Account tier: {tier(equity)}\n\n📈 Trading status: DEMO / PAPER\n🥇 XAU/USD: simulated\n₿ BTC/USDT: simulated\n\nUse Demo Trading to open and close paper positions and view simulated P/L."
+    if q.data=="notifications":
+        rows=get_notifications(uid,10)
+        mark_notifications_read(uid)
+        text="🔔 NOTIFICATIONS\n\n"+("\n\n".join([f"{r['title']}\n{r['message']}\n{r['created_at'][:19]} UTC" for r in rows]) if rows else "No notifications yet.")
+    elif q.data=="report":
+        rows=get_demo_trades(uid)
+        closed=[r for r in rows if r["status"]=="closed"]
+        pnl=sum(Decimal(str(r["pnl"] or 0)) for r in closed)
+        open_count=sum(1 for r in rows if r["status"]=="open")
+        text=f"📊 ACCOUNT REPORT\n\nClosed demo trades: {len(closed)}\nOpen demo trades: {open_count}\nRealized simulated P/L: {money(pnl)}\n\n🧪 Demo results only."
+    elif q.data=="dashboard": text=f"📊 DASHBOARD\n\n💵 Available demo balance: {money(bal)}\n🔒 Locked in open trades: {money(locked)}\n💎 Demo equity: {money(equity)}\n🏷 Account tier: {tier(equity)}\n\n📈 Trading status: DEMO / PAPER\n🥇 XAU/USD: simulated\n₿ BTC/USDT: simulated\n\nUse Demo Trading to open and close paper positions and view simulated P/L."
     elif q.data=="transactions":
         rows=get_transactions(uid); text="📜 TRANSACTIONS\n\n"+("\n".join([f"• {r['kind'].title()} {money(r['amount'])} — {r['reference'] or '—'}" for r in rows]) if rows else "No completed demo transactions yet.")
     elif q.data=="referral": text=f"👥 REFERRAL\n\nYour referral code: {u['referral_code'] if u else '—'}\n\nReferral analytics are included in the v4 account model. Reward terms should be published only after the commercial/legal model is finalized."
@@ -246,6 +293,6 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN is missing")
     init_db(); app=Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("admin",admin)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text)); app.add_handler(CallbackQueryHandler(callback)); app.run_polling()
+    app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("admin",admin)); app.add_handler(CommandHandler("notify",notify)); app.add_handler(CommandHandler("notify",notify)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text)); app.add_handler(CallbackQueryHandler(callback)); app.run_polling()
 
 if __name__=="__main__": main()

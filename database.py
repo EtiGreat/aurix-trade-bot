@@ -40,6 +40,7 @@ def init_db():
     if "referral_code" not in cols: x.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
     if "referred_by" not in cols: x.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
     _ensure_v43(c)
+    _ensure_v45(c)
     c.commit(); c.close()
 
 def get_user(tid):
@@ -136,3 +137,39 @@ def add_admin_audit(admin_id,action,target_id=None,details=""):
 
 def get_admin_audit(limit=20):
     c=conn(); rows=c.execute("SELECT * FROM admin_audit ORDER BY id DESC LIMIT ?",(limit,)).fetchall(); c.close(); return [dict(r) for r in rows]
+
+
+def _ensure_v45(c):
+    c.execute("""CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL,
+        title TEXT NOT NULL, message TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'system',
+        is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+    )""")
+
+def add_notification(tid,title,message,kind='system'):
+    c=conn(); c.execute("INSERT INTO notifications (telegram_id,title,message,kind,created_at) VALUES (?,?,?,?,?)",(tid,title,message,kind,now())); c.commit(); c.close()
+
+def get_notifications(tid,limit=10,unread_only=False):
+    c=conn(); q="SELECT * FROM notifications WHERE telegram_id=?"; args=[tid]
+    if unread_only: q += " AND is_read=0"
+    q += " ORDER BY id DESC LIMIT ?"; args.append(limit)
+    rows=c.execute(q,args).fetchall(); c.close(); return [dict(r) for r in rows]
+
+def mark_notifications_read(tid):
+    c=conn(); c.execute("UPDATE notifications SET is_read=1 WHERE telegram_id=?",(tid,)); c.commit(); c.close()
+
+def count_unread_notifications(tid):
+    c=conn(); n=c.execute("SELECT COUNT(*) FROM notifications WHERE telegram_id=? AND is_read=0",(tid,)).fetchone()[0]; c.close(); return n
+
+def get_operational_report():
+    c=conn()
+    users=c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    active=c.execute("SELECT COUNT(*) FROM user_controls WHERE status='active'").fetchone()[0]
+    suspended=c.execute("SELECT COUNT(*) FROM user_controls WHERE status='suspended'").fetchone()[0]
+    open_trades=c.execute("SELECT COUNT(*) FROM demo_trades WHERE status='open'").fetchone()[0]
+    closed_trades=c.execute("SELECT COUNT(*) FROM demo_trades WHERE status='closed'").fetchone()[0]
+    demo_pnl=c.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades WHERE status='closed'").fetchone()[0]
+    pending_deposits=c.execute("SELECT COUNT(*) FROM requests WHERE status='pending' AND kind='deposit'").fetchone()[0]
+    pending_withdrawals=c.execute("SELECT COUNT(*) FROM requests WHERE status='pending' AND kind='withdrawal'").fetchone()[0]
+    unread=c.execute("SELECT COUNT(*) FROM notifications WHERE is_read=0").fetchone()[0]
+    c.close(); return dict(users=users,active=active,suspended=suspended,open_trades=open_trades,closed_trades=closed_trades,demo_pnl=demo_pnl,pending_deposits=pending_deposits,pending_withdrawals=pending_withdrawals,unread=unread)

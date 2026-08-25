@@ -24,3 +24,7 @@ Do not commit secrets to GitHub. Set them in Railway Variables.
 3. Open the Railway public domain and verify `/health`, `/`, `/terms`, `/privacy`, `/risk`.
 4. Open Telegram and test `/start`, dashboard, demo trading, and `/admin`.
 5. Keep all real-money features disabled until the legal/regulatory and operational requirements are satisfied.
+
+
+## V4.5
+Adds user notifications, account reporting, operational reporting, and admin broadcast notifications. Demo/paper trading only. Admin: `/notify Title | Message`.
