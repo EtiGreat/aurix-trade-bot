@@ -1,9 +1,9 @@
-import logging, math, time
+import logging, math, time, os, threading
 from decimal import Decimal, InvalidOperation
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit
-from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME
+from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME, PUBLIC_BASE_URL, OFFICIAL_CHANNEL_URL
 
 logging.basicConfig(level=logging.INFO)
 pending = {}
@@ -25,13 +25,15 @@ def market_price(symbol):
     return round(base*(1+wave), 2)
 
 def menu():
-    return InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton("📊 Dashboard", callback_data="dashboard"), InlineKeyboardButton("💰 Deposit", callback_data="deposit")],
         [InlineKeyboardButton("📈 Demo Trading", callback_data="trading"), InlineKeyboardButton("💵 Withdraw", callback_data="withdraw")],
         [InlineKeyboardButton("📜 Transactions", callback_data="transactions"), InlineKeyboardButton("👥 Referral", callback_data="referral")],
         [InlineKeyboardButton("🆘 Support", callback_data="support"), InlineKeyboardButton("⚠️ Risk", callback_data="risk")],
-        [InlineKeyboardButton("📢 Official Channel", callback_data="channel")]
-    ])
+        [InlineKeyboardButton("📜 Legal & Risk", callback_data="legal")],
+        [InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL_URL)] if OFFICIAL_CHANNEL_URL else [InlineKeyboardButton("📢 Official Channel", callback_data="channel")]
+    ]
+    return InlineKeyboardMarkup(rows)
 
 def back(): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="dashboard")]])
 
@@ -210,11 +212,38 @@ async def callback(update,context):
         rows=get_transactions(uid); text="📜 TRANSACTIONS\n\n"+("\n".join([f"• {r['kind'].title()} {money(r['amount'])} — {r['reference'] or '—'}" for r in rows]) if rows else "No completed demo transactions yet.")
     elif q.data=="referral": text=f"👥 REFERRAL\n\nYour referral code: {u['referral_code'] if u else '—'}\n\nReferral analytics are included in the v4 account model. Reward terms should be published only after the commercial/legal model is finalized."
     elif q.data=="support": text=f"🆘 SUPPORT\n\n{('@'+SUPPORT_USERNAME) if SUPPORT_USERNAME else 'Configure SUPPORT_USERNAME in Railway Variables.'}"
-    elif q.data=="channel": text="📢 OFFICIAL CHANNEL\n\nConfigure the official Telegram channel URL before publishing this button."
+    elif q.data=="channel": text="📢 OFFICIAL CHANNEL\n\nConfigure OFFICIAL_CHANNEL_URL in Railway Variables before publishing this button."
+    elif q.data=="legal":
+        base=PUBLIC_BASE_URL or "your Railway public URL"
+        text=f"📜 LEGAL & RISK\n\nTerms: {base}/terms\nPrivacy: {base}/privacy\nRisk Disclosure: {base}/risk\n\n🧪 Current mode: DEMO / PAPER TRADING"
     else: text="⚠️ RISK DISCLOSURE\n\nTrading Forex/CFDs, cryptocurrencies and other financial instruments involves substantial risk and may result in loss of capital. Past performance does not guarantee future results. AURIX TRADE does not guarantee profits or specific returns."
     await q.edit_message_text(text,reply_markup=menu())
 
+def run_web_server():
+    from flask import Flask, jsonify, render_template_string
+    app = Flask(__name__)
+    brand = "AURIX TRADE"
+    def page(title, body):
+        return render_template_string("""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>{{title}}</title><style>body{margin:0;background:#080808;color:#f5f5f5;font-family:Inter,Arial,sans-serif}main{max-width:860px;margin:auto;padding:48px 24px}h1,h2{font-family:Montserrat,Arial,sans-serif;color:#D4AF37}a{color:#F5C542}.card{border:1px solid #2b2b2b;border-radius:16px;padding:24px;margin:18px 0;background:#101010}.muted{color:#C7CBD1}footer{margin-top:40px;color:#888;font-size:14px}</style></head><body><main><h1>🟡 AURIX TRADE</h1><div class="muted">Trade Smarter. Grow With Discipline.</div>{{body|safe}}<footer>Automated Gold & Crypto Trading · Demo/Paper Trading Environment</footer></main></body></html>""", title=title, body=body)
+    @app.get('/')
+    def home():
+        return page(brand, '<div class="card"><h2>Automated Gold & Crypto Trading</h2><p>Technology-driven trading with transparent performance tracking and disciplined risk management.</p><p><b>Markets:</b> XAU/USD · BTC/USDT</p><p><b>Status:</b> DEMO / PAPER TRADING</p><p class="muted">No real deposits, custody, withdrawals, or broker/exchange orders are processed by this build.</p></div>')
+    @app.get('/health')
+    def health(): return jsonify(status='ok', mode='demo', service='aurix-trade')
+    @app.get('/terms')
+    def terms():
+        return page('Terms', '<div class="card"><h2>Terms of Use</h2><p>AURIX TRADE is currently provided as a demonstration and paper-trading environment. No real-money investment, custody, withdrawal, or execution service is offered by this build.</p><p>Users are responsible for understanding financial-market risks. No profit or return is guaranteed.</p></div>')
+    @app.get('/privacy')
+    def privacy():
+        return page('Privacy', '<div class="card"><h2>Privacy Notice</h2><p>The demo may process Telegram account identifiers, usernames and activity required to operate the service. Do not submit passwords, payment credentials, private keys or other sensitive financial information through the demo bot.</p></div>')
+    @app.get('/risk')
+    def risk():
+        return page('Risk Disclosure', '<div class="card"><h2>Risk Disclosure</h2><p>Trading Forex/CFDs, cryptocurrencies and other financial instruments involves substantial risk and may result in loss of capital. Past performance does not guarantee future results. AURIX TRADE does not guarantee profits or specific returns.</p><p>This build uses simulated paper trading only.</p></div>')
+    port=int(os.getenv('PORT','8080'))
+    app.run(host='0.0.0.0',port=port,debug=False,use_reloader=False)
+
 def main():
+    threading.Thread(target=run_web_server, daemon=True).start()
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN is missing")
     init_db(); app=Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("admin",admin)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text)); app.add_handler(CallbackQueryHandler(callback)); app.run_polling()

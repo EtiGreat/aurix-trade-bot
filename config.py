@@ -8,3 +8,7 @@ SUPPORT_USERNAME=os.getenv("SUPPORT_USERNAME","")
 MIN_DEPOSIT_USD=Decimal(os.getenv("MIN_DEPOSIT_USD","50"))
 DEPOSIT_FEE_RATE=Decimal(os.getenv("DEPOSIT_FEE_RATE","0.05"))
 PROFIT_FEE_RATE=Decimal(os.getenv("PROFIT_FEE_RATE","0.20"))
+
+PUBLIC_BASE_URL=os.getenv("PUBLIC_BASE_URL","").rstrip("/")
+OFFICIAL_CHANNEL_URL=os.getenv("OFFICIAL_CHANNEL_URL","")
+
