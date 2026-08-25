@@ -1,0 +1,9 @@
+start - Start AURIX TRADE
+dashboard - View trading dashboard
+deposit - Deposit funds
+trading - View trading activity
+withdraw - Request withdrawal
+transactions - View transactions
+referral - Referral program
+support - Contact support
+help - Get help
