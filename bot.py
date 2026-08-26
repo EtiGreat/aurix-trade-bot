@@ -1,6 +1,7 @@
-import logging, math, time, os, threading
+import logging, math, time, os, threading, hmac, hashlib, json
+from urllib.parse import parse_qsl
 from decimal import Decimal, InvalidOperation
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report, get_onboarding, set_onboarding, get_onboarding_summary
 from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME, PUBLIC_BASE_URL, OFFICIAL_CHANNEL_URL
@@ -32,6 +33,7 @@ def menu():
         [InlineKeyboardButton("🔔 Notifications", callback_data="notifications"), InlineKeyboardButton("📊 Report", callback_data="report")],
         [InlineKeyboardButton("🆘 Support", callback_data="support"), InlineKeyboardButton("⚠️ Risk", callback_data="risk")],
         [InlineKeyboardButton("🔐 Account & Security", callback_data="account")],
+        [InlineKeyboardButton("🌐 Web Dashboard", web_app=WebAppInfo(url=f"{PUBLIC_BASE_URL.rstrip('/')}/app"))] if PUBLIC_BASE_URL else [InlineKeyboardButton("🌐 Web Dashboard", callback_data="web_dashboard")],
         [InlineKeyboardButton("📜 Legal & Risk", callback_data="legal")],
         [InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL_URL)] if OFFICIAL_CHANNEL_URL else [InlineKeyboardButton("📢 Official Channel", callback_data="channel")]
     ]
@@ -306,6 +308,9 @@ async def callback(update,context):
     elif q.data=="referral": text=f"👥 REFERRAL\n\nYour referral code: {u['referral_code'] if u else '—'}\n\nReferral analytics are included in the v4 account model. Reward terms should be published only after the commercial/legal model is finalized."
     elif q.data=="support": text=f"🆘 SUPPORT\n\n{('@'+SUPPORT_USERNAME) if SUPPORT_USERNAME else 'Configure SUPPORT_USERNAME in Railway Variables.'}"
     elif q.data=="channel": text="📢 OFFICIAL CHANNEL\n\nConfigure OFFICIAL_CHANNEL_URL in Railway Variables before publishing this button."
+    elif q.data=="web_dashboard":
+        base=PUBLIC_BASE_URL or "your Railway public URL"
+        text=f"🌐 WEB DASHBOARD\n\nOpen: {base}/app\n\nIf the dashboard is opened inside Telegram, your demo account can be shown securely.\n\n🧪 Demo / paper trading only."
     elif q.data=="legal":
         base=PUBLIC_BASE_URL or "your Railway public URL"
         text=f"📜 LEGAL & RISK\n\nTerms: {base}/terms\nPrivacy: {base}/privacy\nRisk Disclosure: {base}/risk\n\n🧪 Current mode: DEMO / PAPER TRADING"
@@ -313,27 +318,61 @@ async def callback(update,context):
     await q.edit_message_text(text,reply_markup=menu())
 
 def run_web_server():
-    from flask import Flask, jsonify, render_template_string
+    from flask import Flask, jsonify, render_template_string, request
     app = Flask(__name__)
-    brand = "AURIX TRADE"
-    def page(title, body):
-        return render_template_string("""<!doctype html><html><head><meta name=viewport content="width=device-width,initial-scale=1"><title>{{title}}</title><style>body{margin:0;background:#080808;color:#f5f5f5;font-family:Inter,Arial,sans-serif}main{max-width:860px;margin:auto;padding:48px 24px}h1,h2{font-family:Montserrat,Arial,sans-serif;color:#D4AF37}a{color:#F5C542}.card{border:1px solid #2b2b2b;border-radius:16px;padding:24px;margin:18px 0;background:#101010}.muted{color:#C7CBD1}footer{margin-top:40px;color:#888;font-size:14px}</style></head><body><main><h1>🟡 AURIX TRADE</h1><div class="muted">Trade Smarter. Grow With Discipline.</div>{{body|safe}}<footer>Automated Gold & Crypto Trading · Demo/Paper Trading Environment</footer></main></body></html>""", title=title, body=body)
+
+    def page(title, body, scripts=""):
+        return render_template_string("""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}}</title><style>
+        :root{--black:#080808;--gold:#D4AF37;--gold2:#F5C542;--silver:#C7CBD1;--green:#19B879;--line:#292f35}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#1b1b18 0,#080808 48%);color:#f5f5f5;font-family:Inter,Arial,sans-serif}.wrap{max-width:1120px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}.brand{font-weight:900;letter-spacing:.04em;font-size:25px;color:var(--gold)}.tag{color:var(--silver);font-size:13px}.pill{padding:8px 12px;border:1px solid #4b3e16;border-radius:999px;color:var(--gold2);background:#16140d;font-size:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{border:1px solid var(--line);border-radius:18px;padding:20px;background:linear-gradient(145deg,#151a20,#0d0f12);box-shadow:0 10px 30px #0006}.label{color:var(--silver);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:28px;font-weight:800;margin-top:7px}.gold{color:var(--gold2)}.green{color:var(--green)}.section{margin-top:18px}.section h2{font-size:17px;margin:0 0 12px;color:var(--gold)}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px 8px;border-bottom:1px solid var(--line);font-size:13px}th{color:var(--silver)}.muted{color:#9aa1a9}.notice{border-left:3px solid var(--gold);padding:12px 14px;background:#17140d;border-radius:8px;color:#d7d7d7}.btn{display:inline-block;padding:12px 15px;border-radius:10px;background:var(--gold);color:#090909;text-decoration:none;font-weight:800}.hero{padding:28px;border-radius:22px;border:1px solid #3b321a;background:linear-gradient(135deg,#17150e,#101214)}@media(max-width:800px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:520px){.wrap{padding:14px}.grid{grid-template-columns:1fr}.value{font-size:24px}}
+        </style></head><body><div class="wrap"><div class="top"><div><div class="brand">🟡 AURIX TRADE</div><div class="tag">Trade Smarter. Grow With Discipline.</div></div><div class="pill">DEMO / PAPER TRADING</div></div>{{body|safe}}<div class="section muted" style="font-size:12px">Automated Gold & Crypto Trading · XAU/USD · BTC/USDT · No real deposits, custody, withdrawals or broker/exchange orders are processed by this build.</div></div>{{scripts|safe}}</body></html>""", title=title, body=body, scripts=scripts)
+
     @app.get('/')
     def home():
-        return page(brand, '<div class="card"><h2>Automated Gold & Crypto Trading</h2><p>Technology-driven trading with transparent performance tracking and disciplined risk management.</p><p><b>Markets:</b> XAU/USD · BTC/USDT</p><p><b>Status:</b> DEMO / PAPER TRADING</p><p class="muted">No real deposits, custody, withdrawals, or broker/exchange orders are processed by this build.</p></div>')
+        return page('AURIX TRADE', '<div class="hero"><h1 style="color:#F5C542;margin-top:0">Professional trading dashboard</h1><p>Monitor your AURIX demo account, simulated positions, performance and onboarding status from one place.</p><p class="notice">🧪 This environment is paper trading only. No real money is accepted or moved.</p><p><a class="btn" href="/app">Open Dashboard</a></p></div>')
+
+    @app.get('/app')
+    def app_page():
+        body="""<div id="loading" class="card">Loading secure Telegram session…</div><div id="dash" style="display:none"><div class="hero"><h1 id="welcome" style="color:#F5C542;margin-top:0">AURIX TRADE</h1><p id="status" class="muted"></p></div><div class="section grid"><div class="card"><div class="label">Available balance</div><div class="value" id="balance">—</div></div><div class="card"><div class="label">Locked capital</div><div class="value" id="locked">—</div></div><div class="card"><div class="label">Demo equity</div><div class="value gold" id="equity">—</div></div><div class="card"><div class="label">Account tier</div><div class="value" id="tier">—</div></div></div><div class="section grid"><div class="card"><div class="label">Open positions</div><div class="value" id="open">—</div></div><div class="card"><div class="label">Closed trades</div><div class="value" id="closed">—</div></div><div class="card"><div class="label">Win rate</div><div class="value green" id="winrate">—</div></div><div class="card"><div class="label">Realized P/L</div><div class="value" id="pnl">—</div></div></div><div class="section card"><h2>Open Positions</h2><div id="positions" class="muted">—</div></div><div class="section card"><h2>Recent Activity</h2><div id="activity" class="muted">—</div></div><div class="section card"><h2>Account & Security</h2><div id="onboarding" class="muted">—</div></div></div>"""
+        scripts="""<script src="https://telegram.org/js/telegram-web-app.js"></script><script>const tg=window.Telegram&&window.Telegram.WebApp?window.Telegram.WebApp:null;if(tg){tg.ready();tg.expand();}const initData=tg?tg.initData:"";async function load(){if(!initData){document.getElementById("loading").innerHTML='<div class="notice">Open this dashboard from the <b>🌐 Web Dashboard</b> button inside the AURIX TRADE Telegram bot. Your account data is not exposed through a public login.</div>';return;}const r=await fetch('/api/me',{headers:{'X-Telegram-Init-Data':initData}});const d=await r.json();if(!r.ok){document.getElementById("loading").innerHTML='<div class="notice">Unable to verify the Telegram session. Please reopen the dashboard from Telegram.</div>';return;}document.getElementById('loading').style.display='none';document.getElementById('dash').style.display='block';document.getElementById('welcome').textContent='Welcome, '+(d.user.first_name||'Trader');document.getElementById('status').textContent='Account: '+(d.user.username?'@'+d.user.username:'Telegram user')+' · DEMO / PAPER';const m=x=>'$'+Number(x).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});document.getElementById('balance').textContent=m(d.account.balance);document.getElementById('locked').textContent=m(d.account.locked);document.getElementById('equity').textContent=m(d.account.equity);document.getElementById('tier').textContent=d.account.tier;document.getElementById('open').textContent=d.stats.open;document.getElementById('closed').textContent=d.stats.closed;document.getElementById('winrate').textContent=d.stats.win_rate.toFixed(1)+'%';document.getElementById('pnl').textContent=m(d.stats.pnl);document.getElementById('positions').innerHTML=d.positions.length?'<table><tr><th>Market</th><th>Side</th><th>Stake</th><th>Entry</th><th>Now</th><th>P/L</th></tr>'+d.positions.map(t=>'<tr><td>'+t.symbol+'</td><td>'+t.side+'</td><td>'+m(t.stake)+'</td><td>'+Number(t.entry_price).toLocaleString()+'</td><td>'+Number(t.current_price).toLocaleString()+'</td><td class="'+(t.pnl>=0?'green':'')+'">'+m(t.pnl)+'</td></tr>').join('')+'</table>':'No open demo positions.';document.getElementById('activity').innerHTML=d.recent.length?'<table><tr><th>Market</th><th>Side</th><th>Status</th><th>P/L</th></tr>'+d.recent.map(t=>'<tr><td>'+t.symbol+'</td><td>'+t.side+'</td><td>'+t.status+'</td><td>'+m(t.pnl||0)+'</td></tr>').join('')+'</table>':'No demo trades yet.';document.getElementById('onboarding').innerHTML='Terms: '+(d.onboarding.terms?'✅':'❌')+' · Privacy: '+(d.onboarding.privacy?'✅':'❌')+' · Risk: '+(d.onboarding.risk?'✅':'❌')+' · Profile: '+(d.onboarding.profile?'✅':'❌')+' · Verification: '+d.onboarding.verification;}load();</script>"""
+        return page('AURIX Web Dashboard', body, scripts)
+
+    def validate_init_data(init_data):
+        if not BOT_TOKEN or not init_data: return None
+        try:
+            pairs=dict(parse_qsl(init_data,keep_blank_values=True)); received=pairs.pop('hash',None)
+            if not received: return None
+            data_check='\\n'.join(f'{k}={v}' for k,v in sorted(pairs.items()))
+            secret=hmac.new(b'WebAppData',BOT_TOKEN.encode(),hashlib.sha256).digest()
+            calc=hmac.new(secret,data_check.encode(),hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(calc,received): return None
+            if int(time.time())-int(pairs.get('auth_date','0'))>86400: return None
+            return json.loads(pairs.get('user','{}'))
+        except Exception: return None
+
+    def current_user(): return validate_init_data(request.headers.get('X-Telegram-Init-Data',''))
+    def serialize_trade(t):
+        cur,pnl=trade_pnl(t) if t['status']=='open' else (t.get('exit_price') or t['entry_price'], t.get('pnl') or 0)
+        return {'id':t['id'],'symbol':t['symbol'],'side':t['side'],'stake':float(t['stake']),'entry_price':float(t['entry_price']),'current_price':float(cur),'pnl':float(pnl),'status':t['status']}
+
+    @app.get('/api/me')
+    def api_me():
+        tg_user=current_user()
+        if not tg_user: return jsonify(error='unauthorized'),401
+        uid=int(tg_user['id']); u=get_user(uid)
+        if not u: return jsonify(error='account_not_found'),404
+        bal=Decimal(str(u.get('balance',0))); locked=Decimal(str(u.get('locked_balance',0))); equity=bal+locked
+        rows=get_demo_trades(uid); closed=[r for r in rows if r['status']=='closed']; pnl=sum(Decimal(str(r.get('pnl') or 0)) for r in closed); wins=sum(1 for r in closed if Decimal(str(r.get('pnl') or 0))>0); wr=float(Decimal(wins)/Decimal(len(closed))*100) if closed else 0.0
+        return jsonify(user={'id':uid,'first_name':tg_user.get('first_name',''),'username':tg_user.get('username','')},account={'balance':float(bal),'locked':float(locked),'equity':float(equity),'tier':tier(equity)},stats={'open':sum(1 for r in rows if r['status']=='open'),'closed':len(closed),'win_rate':wr,'pnl':float(pnl)},positions=[serialize_trade(r) for r in rows if r['status']=='open'],recent=[serialize_trade(r) for r in rows[:10]],onboarding=get_onboarding_summary(uid))
+
     @app.get('/health')
-    def health(): return jsonify(status='ok', mode='demo', service='aurix-trade')
+    def health(): return jsonify(status='ok', mode='demo', service='aurix-trade', dashboard='enabled')
     @app.get('/terms')
-    def terms():
-        return page('Terms', '<div class="card"><h2>Terms of Use</h2><p>AURIX TRADE is currently provided as a demonstration and paper-trading environment. No real-money investment, custody, withdrawal, or execution service is offered by this build.</p><p>Users are responsible for understanding financial-market risks. No profit or return is guaranteed.</p></div>')
+    def terms(): return page('Terms','<div class="card"><h2>Terms of Use</h2><p>AURIX TRADE is currently provided as a demonstration and paper-trading environment. No real-money investment, custody, withdrawal, or execution service is offered by this build.</p><p>Users are responsible for understanding financial-market risks. No profit or return is guaranteed.</p></div>')
     @app.get('/privacy')
-    def privacy():
-        return page('Privacy', '<div class="card"><h2>Privacy Notice</h2><p>The demo may process Telegram account identifiers, usernames and activity required to operate the service. Do not submit passwords, payment credentials, private keys or other sensitive financial information through the demo bot.</p></div>')
+    def privacy(): return page('Privacy','<div class="card"><h2>Privacy Notice</h2><p>The demo may process Telegram account identifiers, usernames and activity required to operate the service. Do not submit passwords, payment credentials, private keys or other sensitive financial information through the demo bot.</p></div>')
     @app.get('/risk')
-    def risk():
-        return page('Risk Disclosure', '<div class="card"><h2>Risk Disclosure</h2><p>Trading Forex/CFDs, cryptocurrencies and other financial instruments involves substantial risk and may result in loss of capital. Past performance does not guarantee future results. AURIX TRADE does not guarantee profits or specific returns.</p><p>This build uses simulated paper trading only.</p></div>')
-    port=int(os.getenv('PORT','8080'))
-    app.run(host='0.0.0.0',port=port,debug=False,use_reloader=False)
+    def risk(): return page('Risk Disclosure','<div class="card"><h2>Risk Disclosure</h2><p>Trading Forex/CFDs, cryptocurrencies and other financial instruments involves substantial risk and may result in loss of capital. Past performance does not guarantee future results. AURIX TRADE does not guarantee profits or specific returns.</p><p>This build uses simulated paper trading only.</p></div>')
+    port=int(os.getenv('PORT','8080'));app.run(host='0.0.0.0',port=port,debug=False,use_reloader=False)
 
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()

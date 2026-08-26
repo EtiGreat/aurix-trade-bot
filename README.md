@@ -1,17 +1,24 @@
-# AURIX TRADE V4.6 — Onboarding & Account Security
+# AURIX TRADE V4.7 — Professional Web Dashboard
 
-V4.6 extends V4.5.1 with a demo-safe onboarding and account-security layer.
+Adds a secure Telegram Web App dashboard to the V4.6 demo/paper-trading system.
 
-## Added
-- Account & Security screen
-- Demo Terms / Privacy / Risk acknowledgements
-- Basic profile completion using Telegram profile data only
-- Verification status placeholder (no document collection)
-- Security reminder around Telegram login codes
-- Automatic SQLite migration for onboarding data
-
-## Safety boundary
-This build remains DEMO / PAPER TRADING ONLY. It does not collect identity documents, process real deposits, custody funds, execute broker/exchange orders, or perform real withdrawals. A future live-money release should implement appropriate KYC/AML, sanctions, privacy, security, regulatory and operational controls before activation.
+## New
+- Telegram Web App button in the bot menu
+- Secure Telegram `initData` HMAC validation
+- User-specific dashboard for balance, locked capital, equity and tier
+- Open positions and recent demo trades
+- Win rate and realized simulated P/L
+- Onboarding/security status
+- Responsive AURIX black/gold UI
+- `/app` dashboard and `/api/me` authenticated data endpoint
+- `/health` reports dashboard enabled
 
 ## Deploy
-Replace the repository root files, commit, and let Railway redeploy. Do not upload `.env` or secrets.
+1. Replace the V4.6 project files in the GitHub repository with these files at the repository root.
+2. Keep secrets out of GitHub.
+3. In Railway, set `PUBLIC_BASE_URL` to the Railway HTTPS public URL.
+4. Redeploy and wait for Successful.
+5. Open the AURIX Telegram bot and tap **🌐 Web Dashboard**.
+
+## Important
+This remains a DEMO/PAPER-TRADING environment. No real deposits, custody, withdrawals, or broker/exchange orders are enabled.
