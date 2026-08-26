@@ -2,7 +2,7 @@ import logging, math, time, os, threading
 from decimal import Decimal, InvalidOperation
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report
+from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report, get_onboarding, set_onboarding, get_onboarding_summary
 from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME, PUBLIC_BASE_URL, OFFICIAL_CHANNEL_URL
 
 logging.basicConfig(level=logging.INFO)
@@ -30,8 +30,8 @@ def menu():
         [InlineKeyboardButton("📈 Demo Trading", callback_data="trading"), InlineKeyboardButton("💵 Withdraw", callback_data="withdraw")],
         [InlineKeyboardButton("📜 Transactions", callback_data="transactions"), InlineKeyboardButton("👥 Referral", callback_data="referral")],
         [InlineKeyboardButton("🔔 Notifications", callback_data="notifications"), InlineKeyboardButton("📊 Report", callback_data="report")],
-        [InlineKeyboardButton("🔔 Notifications", callback_data="notifications"), InlineKeyboardButton("📊 Report", callback_data="report")],
         [InlineKeyboardButton("🆘 Support", callback_data="support"), InlineKeyboardButton("⚠️ Risk", callback_data="risk")],
+        [InlineKeyboardButton("🔐 Account & Security", callback_data="account")],
         [InlineKeyboardButton("📜 Legal & Risk", callback_data="legal")],
         [InlineKeyboardButton("📢 Official Channel", url=OFFICIAL_CHANNEL_URL)] if OFFICIAL_CHANNEL_URL else [InlineKeyboardButton("📢 Official Channel", callback_data="channel")]
     ]
@@ -55,13 +55,14 @@ def side_menu(symbol):
 async def start(update, context):
     u=update.effective_user
     if not get_user(u.id): create_user(u.id,u.username or "",u.first_name or "")
+    o=get_onboarding(u.id)
+    onboarding_note = "\n🔐 Setup: Demo account onboarding not yet completed. Tap Account & Security to review." if not o["terms_accepted"] else ""
     await update.message.reply_text(
         "🟡 AURIX TRADE\n\nTrade Smarter. Grow With Discipline.\n\n"
         "🤖 Automated Gold & Crypto Trading\n🥇 XAU/USD  •  ₿ BTC/USDT\n\n"
         f"💰 Minimum demo deposit: {money(MIN_DEPOSIT_USD)}\n\n"
         "🧪 DEMO / PAPER-TRADING MODE\nNo real deposits, custody, broker orders or withdrawals are processed by this build.\n\n"
-        f"🔔 Notifications: {count_unread_notifications(u.id)} unread\n\n"
-        f"🔔 Notifications: {count_unread_notifications(u.id)} unread\n\n"
+        f"🔔 Notifications: {count_unread_notifications(u.id)} unread" + onboarding_note + "\n\n"
         "⚠️ Trading involves substantial risk. Returns are not guaranteed.", reply_markup=menu())
 
 async def admin(update, context):
@@ -74,7 +75,6 @@ def admin_menu():
         [InlineKeyboardButton("👥 Users",callback_data="admin_users")],
         [InlineKeyboardButton("💰 Deposit Requests",callback_data="admin_deposits"),InlineKeyboardButton("💵 Withdrawal Requests",callback_data="admin_withdrawals")],
         [InlineKeyboardButton("🛡 Risk Controls",callback_data="admin_risk"),InlineKeyboardButton("📜 Audit Log",callback_data="admin_audit")],
-        [InlineKeyboardButton("📊 Operations Report",callback_data="admin_report")],
         [InlineKeyboardButton("📊 Operations Report",callback_data="admin_report")],
         [InlineKeyboardButton("🔄 Refresh",callback_data="admin_home")]
     ])
@@ -200,8 +200,55 @@ async def admin_report(update,context):
         f"⏳ Pending deposits: {r['pending_deposits']}\n💵 Pending withdrawals: {r['pending_withdrawals']}\n"
         f"🔔 Unread notifications: {r['unread']}\n\n🧪 Demo/paper-trading environment only.", reply_markup=admin_menu())
 
+async def account_screen(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    o=get_onboarding(uid)
+    u=get_user(uid) or {}
+    terms="✅ Accepted" if o["terms_accepted"] else "⏳ Pending"
+    privacy="✅ Acknowledged" if o["privacy_acknowledged"] else "⏳ Pending"
+    risk="✅ Acknowledged" if o["risk_acknowledged"] else "⏳ Pending"
+    profile="✅ Complete" if o["profile_completed"] else "⏳ Basic profile only"
+    verification=o["verification_status"].replace("_"," ").title()
+    text=(f"🔐 ACCOUNT & SECURITY\n\n👤 Telegram ID: {uid}\n"
+          f"📛 Username: @{u.get('username') or 'not set'}\n"
+          f"📅 Account created: {u.get('created_at','—')}\n\n"
+          f"📜 Terms: {terms}\n🔏 Privacy: {privacy}\n⚠️ Risk disclosure: {risk}\n"
+          f"👤 Profile: {profile}\n🪪 Verification status: {verification}\n\n"
+          "🧪 Demo account: no live-money access is enabled.\n"
+          "🔒 Telegram identity is the current sign-in mechanism. Never share your Telegram login codes with anyone.")
+    buttons=[]
+    if not o["terms_accepted"] or not o["privacy_acknowledged"] or not o["risk_acknowledged"]:
+        buttons.append([InlineKeyboardButton("✅ Review & Accept Demo Terms", callback_data="onboard_accept")])
+    if not o["profile_completed"]:
+        buttons.append([InlineKeyboardButton("👤 Complete Basic Profile", callback_data="onboard_profile")])
+    buttons.append([InlineKeyboardButton("🪪 Verification Status", callback_data="verification")])
+    buttons.append([InlineKeyboardButton("🔙 Main Menu", callback_data="dashboard")])
+    await q.edit_message_text(text,reply_markup=InlineKeyboardMarkup(buttons))
+
+async def accept_demo_terms(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    set_onboarding(uid,terms_accepted=1,privacy_acknowledged=1,risk_acknowledged=1,last_security_check=time.strftime('%Y-%m-%d %H:%M:%S'))
+    add_admin_audit(uid,"demo_terms_accepted",None,"terms=1,privacy=1,risk=1") if is_admin(uid) else None
+    await q.edit_message_text("✅ DEMO TERMS ACCEPTED\n\nYou acknowledged the Terms, Privacy Notice and Risk Disclosure for the AURIX TRADE demo environment.\n\nThis does not authorize real-money deposits, custody, withdrawals or live trading.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👤 Complete Basic Profile",callback_data="onboard_profile")],[InlineKeyboardButton("🪪 Verification Status",callback_data="verification")],[InlineKeyboardButton("🔙 Main Menu",callback_data="dashboard")]]))
+
+async def complete_profile(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    u=get_user(uid) or {}
+    set_onboarding(uid,profile_completed=1,last_security_check=time.strftime('%Y-%m-%d %H:%M:%S'))
+    await q.edit_message_text(f"👤 BASIC PROFILE\n\nName: {u.get('first_name') or 'Not set'}\nUsername: @{u.get('username') or 'not set'}\nTelegram ID: {uid}\n\nNo sensitive identity documents are collected by this demo build.\n\nFor any future live-money service, a separate compliant KYC process must be implemented before access is granted.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🪪 Verification Status",callback_data="verification")],[InlineKeyboardButton("🔙 Account & Security",callback_data="account")]]))
+
+async def verification_screen(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    o=get_onboarding(uid)
+    status=o["verification_status"].replace("_"," ").title()
+    await q.edit_message_text(f"🪪 VERIFICATION STATUS\n\nCurrent status: {status}\n\n🧪 This is a demo/paper-trading environment, so identity-document submission is disabled.\n\nBefore any real-money service is enabled, AURIX TRADE should implement the required KYC/AML, sanctions screening, data-protection and regulatory controls for the jurisdictions in which it operates.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Account & Security",callback_data="account")]]))
+
 async def callback(update,context):
     q=update.callback_query; await q.answer(); uid=q.from_user.id
+    if q.data=="account": return await account_screen(update,context)
+    if q.data=="onboard_accept": return await accept_demo_terms(update,context)
+    if q.data=="onboard_profile": return await complete_profile(update,context)
+    if q.data=="verification": return await verification_screen(update,context)
     if q.data=="admin_home":
         if is_admin(uid):
             users,pending_count,volume=get_stats(); await q.edit_message_text(f"🛡 AURIX TRADE ADMIN\n\n👥 Users: {users}\n⏳ Pending requests: {pending_count}\n💵 Demo transaction volume: {money(volume)}",reply_markup=admin_menu())
@@ -209,7 +256,6 @@ async def callback(update,context):
     if q.data=="admin_users": return await admin_users(update,context)
     if q.data=="admin_risk": return await admin_risk(update,context)
     if q.data=="admin_audit": return await admin_audit(update,context)
-    if q.data=="admin_report": return await admin_report(update,context)
     if q.data=="admin_report": return await admin_report(update,context)
     if q.data.startswith("userstatus:"):
         if not is_admin(uid): return await q.edit_message_text("⛔ Admin access only.")

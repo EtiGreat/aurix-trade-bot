@@ -41,6 +41,7 @@ def init_db():
     if "referred_by" not in cols: x.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
     _ensure_v43(c)
     _ensure_v45(c)
+    _ensure_v46(c)
     c.commit(); c.close()
 
 def get_user(tid):
@@ -173,3 +174,38 @@ def get_operational_report():
     pending_withdrawals=c.execute("SELECT COUNT(*) FROM requests WHERE status='pending' AND kind='withdrawal'").fetchone()[0]
     unread=c.execute("SELECT COUNT(*) FROM notifications WHERE is_read=0").fetchone()[0]
     c.close(); return dict(users=users,active=active,suspended=suspended,open_trades=open_trades,closed_trades=closed_trades,demo_pnl=demo_pnl,pending_deposits=pending_deposits,pending_withdrawals=pending_withdrawals,unread=unread)
+
+
+def _ensure_v46(c):
+    c.execute("""CREATE TABLE IF NOT EXISTS onboarding (
+        telegram_id INTEGER PRIMARY KEY,
+        terms_accepted INTEGER NOT NULL DEFAULT 0,
+        privacy_acknowledged INTEGER NOT NULL DEFAULT 0,
+        risk_acknowledged INTEGER NOT NULL DEFAULT 0,
+        profile_completed INTEGER NOT NULL DEFAULT 0,
+        verification_status TEXT NOT NULL DEFAULT 'not_started',
+        last_security_check TEXT,
+        updated_at TEXT NOT NULL
+    )""")
+    rows=c.execute("SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM onboarding)").fetchall()
+    for r in rows:
+        c.execute("INSERT INTO onboarding (telegram_id,updated_at) VALUES (?,?)",(r[0],now()))
+
+def get_onboarding(tid):
+    c=conn(); r=c.execute("SELECT * FROM onboarding WHERE telegram_id=?",(tid,)).fetchone()
+    if not r:
+        c.execute("INSERT OR IGNORE INTO onboarding (telegram_id,updated_at) VALUES (?,?)",(tid,now())); c.commit(); r=c.execute("SELECT * FROM onboarding WHERE telegram_id=?",(tid,)).fetchone()
+    c.close(); return dict(r)
+
+def set_onboarding(tid, **fields):
+    allowed={'terms_accepted','privacy_acknowledged','risk_acknowledged','profile_completed','verification_status','last_security_check'}
+    updates={k:v for k,v in fields.items() if k in allowed}
+    if not updates: return
+    updates['updated_at']=now()
+    c=conn(); c.execute("INSERT OR IGNORE INTO onboarding (telegram_id,updated_at) VALUES (?,?)",(tid,now()))
+    cols=list(updates); vals=[updates[k] for k in cols]
+    c.execute("UPDATE onboarding SET "+", ".join(f"{k}=?" for k in cols)+" WHERE telegram_id=?", vals+[tid]); c.commit(); c.close()
+
+def get_onboarding_summary(tid):
+    o=get_onboarding(tid)
+    return dict(terms=bool(o['terms_accepted']),privacy=bool(o['privacy_acknowledged']),risk=bool(o['risk_acknowledged']),profile=bool(o['profile_completed']),verification=o['verification_status'])
