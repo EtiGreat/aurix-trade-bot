@@ -5,6 +5,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from database import init_db, get_user, create_user, get_balance, adjust_balance, lock_balance, release_trade_balance, create_request, get_requests, update_request, add_transaction, get_transactions, get_stats, create_demo_trade, get_demo_trades, get_demo_trade, close_demo_trade, get_users, get_user_controls, set_user_status, set_user_risk, add_admin_audit, get_admin_audit, add_notification, get_notifications, mark_notifications_read, count_unread_notifications, get_operational_report, get_onboarding, set_onboarding, get_onboarding_summary
 from config import BOT_TOKEN, ADMIN_TELEGRAM_ID, MIN_DEPOSIT_USD, DEPOSIT_FEE_RATE, SUPPORT_USERNAME, PUBLIC_BASE_URL, OFFICIAL_CHANNEL_URL
+from market_data import current_price as simulated_market_price
+from strategy_engine import generate_signal
+from risk_engine import check_paper_order
+from paper_execution import open_paper_position
 
 logging.basicConfig(level=logging.INFO)
 pending = {}
@@ -20,10 +24,7 @@ def tier(balance):
     return "Starter"
 
 def market_price(symbol):
-    base = 2400.0 if symbol == "XAU/USD" else 105000.0
-    t = time.time()/60
-    wave = math.sin(t/9.0)*0.006 + math.sin(t/31.0)*0.004
-    return round(base*(1+wave), 2)
+    return simulated_market_price(symbol)
 
 def menu():
     rows = [
@@ -45,6 +46,7 @@ def trading_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🥇 XAU/USD", callback_data="asset:XAU/USD"), InlineKeyboardButton("₿ BTC/USDT", callback_data="asset:BTC/USDT")],
         [InlineKeyboardButton("📂 Open Positions", callback_data="positions"), InlineKeyboardButton("📊 Performance", callback_data="performance")],
+        [InlineKeyboardButton("🧠 Strategy Signals", callback_data="signals")],
         [InlineKeyboardButton("🔙 Main Menu", callback_data="dashboard")]
     ])
 
@@ -130,9 +132,11 @@ async def handle_text(update, context):
         if stake > Decimal(str(controls["max_trade_stake"])): return await update.message.reply_text(f"Risk limit: maximum demo stake is {money(controls['max_trade_stake'])}.")
         if len(get_demo_trades(uid,"open")) >= int(controls["max_open_positions"]): return await update.message.reply_text(f"Risk limit: maximum open positions is {controls['max_open_positions']}.")
         if stake > balance-open_stake: return await update.message.reply_text(f"Stake exceeds available demo capital. Available: {money(balance-open_stake)}")
-        if not lock_balance(uid, float(stake)): return await update.message.reply_text("Unable to reserve that demo stake. Please try again.")
-        entry=market_price(symbol); trade_id=create_demo_trade(uid,symbol,side,float(stake),entry); pending.pop(uid,None)
-        await update.message.reply_text(f"📈 DEMO POSITION OPENED\n\n{symbol} • {side}\nStake: {money(stake)}\nEntry: {entry:,.2f}\nTrade ID: #{trade_id}\n\nThis is simulated paper trading only; no broker/exchange order was sent.",reply_markup=trading_menu())
+        entry=market_price(symbol)
+        trade_id, reason = open_paper_position(uid, symbol, side, float(stake), entry)
+        if not trade_id: return await update.message.reply_text(f"🛡️ Risk check blocked the demo order: {reason}", reply_markup=trading_menu())
+        pending.pop(uid,None)
+        await update.message.reply_text(f"📈 DEMO POSITION OPENED\n\n{symbol} • {side}\nStake: {money(stake)}\nEntry: {entry:,.2f}\nTrade ID: #{trade_id}\n\n🧪 SIMULATED PAPER EXECUTION — no broker/exchange order was sent.",reply_markup=trading_menu())
 
 async def admin_users(update,context):
     q=update.callback_query; await q.answer()
@@ -289,6 +293,14 @@ async def callback(update,context):
         cur,pnl=trade_pnl(t);
         if not release_trade_balance(uid, float(t["stake"]), float(pnl)): return await q.edit_message_text("Unable to settle this demo position safely. Please contact support.",reply_markup=trading_menu())
         close_demo_trade(tid,uid,cur,float(pnl)); return await q.edit_message_text(f"🔒 DEMO POSITION CLOSED\n\n#{tid} • {t['symbol']} • {t['side']}\nExit: {cur:,.2f}\nSimulated P/L: {money(pnl)}\n\nNo real funds were moved.",reply_markup=trading_menu())
+    if q.data=="signals":
+        rows=[]
+        for symbol in ("XAU/USD","BTC/USDT"):
+            sig=generate_signal(symbol)
+            emoji="🟢" if sig.action=="LONG" else ("🔴" if sig.action=="SHORT" else "🟡")
+            rows.append(f"{emoji} {symbol}\nSignal: {sig.action}\nSimulated price: {sig.price:,.2f}\nConfidence: {sig.confidence:.1f}%\nFast MA: {sig.fast_ma:,.2f}\nSlow MA: {sig.slow_ma:,.2f}\nMomentum: {sig.momentum:.3f}%")
+        return await q.edit_message_text("🧠 DEMO STRATEGY SIGNALS\n\n"+"\n\n".join(rows)+"\n\n⚠️ Signals are generated from synthetic demo market data. They are not investment advice and do not place real orders.", reply_markup=trading_menu())
+
     if q.data=="performance":
         rows=get_demo_trades(uid); closed=[r for r in rows if r["status"]=="closed"]; pnl=sum(Decimal(str(r["pnl"] or 0)) for r in closed); wins=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))>0); losses=sum(1 for r in closed if Decimal(str(r["pnl"] or 0))<0); win_rate=(Decimal(wins)/Decimal(len(closed))*100 if closed else Decimal(0)); volume=sum(Decimal(str(r["stake"])) for r in closed); return await q.edit_message_text(f"📊 DEMO PERFORMANCE\n\nClosed trades: {len(closed)}\nWinning trades: {wins}\nLosing trades: {losses}\nWin rate: {win_rate:.1f}%\nDemo volume: {money(volume)}\nRealized simulated P/L: {money(pnl)}\n\n⚠️ These are simulated results only and do not represent live performance.",reply_markup=trading_menu())
     u=get_user(uid); bal=Decimal(str(u["balance"] if u else 0)); locked=Decimal(str(u["locked_balance"] if u and "locked_balance" in u else 0)); equity=bal+locked
@@ -378,6 +390,6 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN is missing")
     init_db(); app=Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("admin",admin)); app.add_handler(CommandHandler("notify",notify)); app.add_handler(CommandHandler("notify",notify)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text)); app.add_handler(CallbackQueryHandler(callback)); app.run_polling()
+    app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("admin",admin)); app.add_handler(CommandHandler("notify",notify)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,handle_text)); app.add_handler(CallbackQueryHandler(callback)); app.run_polling()
 
 if __name__=="__main__": main()

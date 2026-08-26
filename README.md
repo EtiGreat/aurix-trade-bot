@@ -1,24 +1,17 @@
-# AURIX TRADE V4.7 — Professional Web Dashboard
+# AURIX TRADE V5.0
 
-Adds a secure Telegram Web App dashboard to the V4.6 demo/paper-trading system.
-
-## New
-- Telegram Web App button in the bot menu
-- Secure Telegram `initData` HMAC validation
-- User-specific dashboard for balance, locked capital, equity and tier
-- Open positions and recent demo trades
-- Win rate and realized simulated P/L
-- Onboarding/security status
-- Responsive AURIX black/gold UI
-- `/app` dashboard and `/api/me` authenticated data endpoint
-- `/health` reports dashboard enabled
+V5.0 consolidates AURIX TRADE behind explicit market-data, strategy, risk and execution service boundaries while preserving the V4.9 demo/paper-trading workflow.
 
 ## Deploy
-1. Replace the V4.6 project files in the GitHub repository with these files at the repository root.
-2. Keep secrets out of GitHub.
-3. In Railway, set `PUBLIC_BASE_URL` to the Railway HTTPS public URL.
-4. Redeploy and wait for Successful.
-5. Open the AURIX Telegram bot and tap **🌐 Web Dashboard**.
 
-## Important
-This remains a DEMO/PAPER-TRADING environment. No real deposits, custody, withdrawals, or broker/exchange orders are enabled.
+Upload the contents of this folder to the **root** of the GitHub repository connected to Railway. Keep production secrets in Railway Variables; do not commit `.env` files.
+
+Required existing variable: `BOT_TOKEN`.
+
+Optional: `AURIX_TRADING_MODE=DEMO` (default). `PAPER` is also allowed. Any other value fails closed to `DEMO`.
+
+## V5 safety
+
+Live execution and real-money functionality are disabled. The live execution adapter is a deliberate placeholder that raises if called.
+
+See `V5_ARCHITECTURE.md` for the service boundaries and future integration requirements.
