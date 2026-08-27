@@ -1,17 +1,23 @@
-# AURIX TRADE V5.0
+# AURIX TRADE V5.4 — Live-Market Demo Trading
 
-V5.0 consolidates AURIX TRADE behind explicit market-data, strategy, risk and execution service boundaries while preserving the V4.9 demo/paper-trading workflow.
+Purpose:
+- Use live market data from the Exness MT5 terminal.
+- Keep user balances virtual/demo only.
+- Simulate customer trading/execution in AURIX.
+- Keep real-money execution disabled.
 
-## Deploy
+Configuration:
+DEMO_MODE=true
+REAL_DEPOSITS=false
+REAL_WITHDRAWALS=false
+LIVE_CUSTOMER_TRADING=true
+REAL_MONEY_EXECUTION=false
 
-Upload the contents of this folder to the **root** of the GitHub repository connected to Railway. Keep production secrets in Railway Variables; do not commit `.env` files.
+Risk defaults for a $25 reference demo account:
+MAX_RISK_PER_TRADE_PCT=1
+MAX_RISK_PER_TRADE_USD=0.25
+MAX_DAILY_LOSS_USD=0.75
+MAX_OPEN_POSITIONS=1
 
-Required existing variable: `BOT_TOKEN`.
-
-Optional: `AURIX_TRADING_MODE=DEMO` (default). `PAPER` is also allowed. Any other value fails closed to `DEMO`.
-
-## V5 safety
-
-Live execution and real-money functionality are disabled. The live execution adapter is a deliberate placeholder that raises if called.
-
-See `V5_ARCHITECTURE.md` for the service boundaries and future integration requirements.
+The MT5 bridge is market-data only for this stage. No broker order is submitted.
+The live market feed is used to price simulated AURIX demo fills.
